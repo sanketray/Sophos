@@ -1,0 +1,199 @@
+#########################################################################################################
+#                                                                                                       #
+#  Title: Sophos Fix Script                                                                             #
+#  Author: Subhasanket Ray                                                                              #
+#  Purpose: This script is to run on altiris and pull infortmation regarding key registry information   #
+#  and service statuses for Sophos Services and report them         				                    #
+#  Usage:  -SilentMode: [To view report] -FixMode: [To troubleshoot]       			                    #
+#########################################################################################################
+
+#Sophos Fix Script in "SilentMode" will do the following operations:
+# 1 Would check OS name, OS architecture, Service Package
+# 2 Would test connection port status
+# 3 Would determine the status of the Sophos services 
+
+#Sophos Fix Script in "FixMode" will do the following operations:
+# Would Start/Restart the Sophos Services accourdingly.
+
+
+[CmdletBinding()]
+param (     [Parameter(Mandatory=$true)][string]$Action="SilentMode",
+            [switch]$force=$false
+    )
+
+Write-Host "Welcome to the Sophos Fix Script."-foreground "green";
+Write-host "This script is to determne and report issues on hosts configured with Sophos."-foreground "green";
+
+#Port-Test array variables
+#$AvUrls=@("sophos.Example.com")
+
+$SophosUrls = @("sophos.Example.com")
+
+#$ports=@(80,8192,8193,8194)
+
+$SophosPorts = @(80,8192,8193,8194)
+	
+# Get Operating System Info
+#$sServer = "."
+$sOS =Get-WmiObject -class Win32_OperatingSystem -computername $env:Computername -ErrorAction:SilentlyContinue
+$sOS | Select-Object Description, Caption, OSArchitecture, ServicePackMajorVersion | Format-List
+
+Function Port-Test {
+    # This works regardless of any form we get $host - hostname or ip address
+    try {
+        $ip = [System.Net.Dns]::GetHostAddresses($Url) | 
+            select-object IPAddressToString -expandproperty  IPAddressToString
+        if($ip.GetType().Name -eq "Object[]")
+        {
+            #If we have several ip's for that address, let's take first one
+            $ip = $ip[0]
+        }
+    } catch {
+        Write-Host "Possibly $Url is not located in DNS"
+        return
+    }
+    $t = New-Object Net.Sockets.TcpClient
+    # We use Try\Catch to remove exception info from console if we can't connect
+    try
+    {
+        $t.Connect($ip,$port)
+    } catch {}
+
+    if($t.Connected)
+    {
+        $t.Close()
+        $msg = "Port $port on $ip at $url is open"
+    }
+    else
+    {
+        $msg = "Port $port on $ip at $url is closed"                              
+    }
+    Write-Host $msg 
+    $msg 
+}
+
+Function Sophos-PortTest
+{   ForEach ($url in $SophosUrls)
+        {
+            Write-Host "Testing Sophos $url" 
+            ForEach ($port in $SophosPorts)
+        {
+        Port-Test $url $port}
+    }
+}
+Function Get-OperatingSystem() {
+	(Get-WmiObject -Class Win32_OperatingSystem -ComputerName $env:Computername -ErrorAction:SilentlyContinue).caption
+}
+
+Function Get-SophosStatus () {
+	$SophosStatus += "RMS Address, $RmsAddress; "
+    $SophosStatus += "Client Router Name, $ClientRouterName; "
+	$SophosStatus += "AutoUpdateVersion, $AutoUpdateVer; "
+	$SophosStatus += "SavServiceVersion, $SavserviceVersion; "
+	$SophosStatus += "SavManaged, $SavManaged; "
+	$SophosStatus += "SavVersion, $SavserviceVersion"
+	}
+#Gather the startup mode and current running state of Sophos Services
+Function Input-SophosData () {
+$Sophos = @()
+Foreach ($SophosService in $arySophosServices) {
+	    $StartupMode = (Get-WmiObject -Class win32_service -Filter "name = '$SophosService'").StartMode
+		$StartState =  (Get-WmiObject -Class win32_service -Filter "name = '$SophosService'").State
+		$TempObject = new-object PSObject 
+		$TempObject | add-member -membertype NoteProperty -name "Service Name" -Value $SophosService 
+		$TempObject | add-member -membertype NoteProperty -name "Startup Mode" -Value $StartupMode
+		$TempObject | add-member -membertype NoteProperty -name "Start State" -Value $StartState
+        
+		$Sophos += $TempObject
+		$Script:Sophos = $Sophos
+		}
+}
+
+# Gather relevant Sophos information for reporting based on the OS determined by the Get-OperatingSystem function
+Function Get-SophosInfo {  
+    if ($os -like '*2003*') {
+		$Script:SavserviceVersion = (get-itemproperty HKLM:\SOFTWARE\Sophos\SAVService\Application).MarketingVersion
+		$Script:SavserviceStatus = (get-itemproperty HKLM:\SOFTWARE\Sophos\SAVService\Status).UptoDateState
+		$Script:SavserviceUpDate = (get-itemproperty HKLM:\SOFTWARE\Sophos\SAVService\UpdateStatus).UpdateState
+		$Script:RmsAddress = (get-itemproperty HKLM:"\SOFTWARE\Sophos\Messaging System\Router").ParentAddress
+        $Script:ClientRouterName = (get-itemproperty HKLM:"\SOFTWARE\Sophos\Messaging System\Router").NotifyClientUpdate
+		$Script:AutoUpdateVer = (get-itemproperty HKLM:"\SOFTWARE\Sophos\AutoUpdate").ProductVersion
+		$Script:SavManaged = (get-itemproperty HKLM:"\SOFTWARE\Sophos\SAVService\Application").Managed
+		}
+    else { 
+        $Script:SavserviceVersion = (get-itemproperty HKLM:\SOFTWARE\Wow6432Node\Sophos\SAVService\Application).MarketingVersion
+        $Script:SavserviceStatus = (get-itemproperty HKLM:\SOFTWARE\Wow6432Node\Sophos\SAVService\Status).UptoDateState
+        $Script:SavserviceUpDate = (get-itemproperty HKLM:\SOFTWARE\Wow6432Node\Sophos\SAVService\UpdateStatus).UpdateState
+		$Script:RmsAddress = (get-itemproperty HKLM:"\SOFTWARE\Wow6432Node\Sophos\Messaging System\Router").ParentAddress
+        $Script:ClientRouterName = (get-itemproperty HKLM:"\SOFTWARE\Wow6432Node\Sophos\Messaging System\Router").NotifyClientUpdate
+		$Script:AutoUpdateVer = (get-itemproperty HKLM:"\SOFTWARE\Wow6432Node\Sophos\AutoUpdate").ProductVersion
+		$Script:SavManaged = (get-itemproperty HKLM:"\SOFTWARE\Wow6432Node\Sophos\SAVService\Application").Managed
+		}
+}
+#Sophos Endpoint Service array
+$EPTServiceNames = @()
+$EPTServiceNames += "Sophos Message Router"
+$EPTServiceNames += "SAVService"
+$EPTServiceNames += "Sophos Agent"
+$EPTServiceNames += "SAVAdminService"
+$EPTServiceNames += "Sophos Autoupdate Service"
+
+$SophosStatus = @()
+$SophosInfo
+$arySophosServices = "Sophos Message Router","SAVService","Sophos Agent","Sophos AutoUpdate Service","SAVAdminService"
+$OS = Get-OperatingSystem
+If ($Action -eq "SilentMode"){
+    Sophos-PortTest | Out-File $HOME\Desktop\AV-Troubleshooting-Log.txt
+	Get-SophosInfo
+	Input-SophosData
+	#Export-SophosStatus
+	$Sophos  | Out-File -Append $HOME\Desktop\AV-Troubleshooting-Log.txt
+	Write-Host "================================================================================"
+	$Sophos
+	$SavVersion = "SAV Service Version: $SavServiceVersion"
+	$SavStatus = "SAV Service Status: $SavserviceStatus"
+	$SavUpdate = "SAV Service Up-to-Date: $SavserviceUpDate"
+	$RMS = "RMS Address: $RmsAddress"
+    $CRN = "RMS Client Router: $ClientRouterName"
+	$SAU = "AutoUpdate Version: $AutoUpdateVer"
+	$SavManaged = "SAV Managed: $SavManaged"
+
+    $SavVersion | Out-File -Append $HOME\Desktop\AV-Troubleshooting-Log.txt
+    $SavVersion
+    $SavStatus | Out-File -Append $HOME\Desktop\AV-Troubleshooting-Log.txt
+    $SavStatus
+    $SavUpdate | Out-File -Append $HOME\Desktop\AV-Troubleshooting-Log.txt
+    $SavUpdate
+    $RMS | Out-File -Append $HOME\Desktop\AV-Troubleshooting-Log.txt
+    $RMS
+    $CRN | Out-File -Append $HOME\Desktop\AV-Troubleshooting-Log.txt
+    $CRN
+    $SAU | Out-File -Append $HOME\Desktop\AV-Troubleshooting-Log.txt
+    $SAU	
+    $SavManaged | Out-File -Append $HOME\Desktop\AV-Troubleshooting-Log.txt
+    $SavManaged
+}
+ElseIf ($action -eq "FixMode") {
+	Get-SophosInfo
+	Input-SophosData
+	Foreach	($SophosService in $arySophosServices) {
+	    $StartupMode = (Get-WmiObject -Class win32_service -Filter "name = '$SophosService'").StartMode
+		If ($StartupMode -eq "Auto") {
+		#Do nothing
+		}
+		Else {
+        Write-Host "Re-enabling $SophosService"
+		Set-Service "$SophosService" -StartupType Automatic
+			}
+		}
+	foreach ($thisService in $EPTServiceNames) {
+	#need: error trapping
+    Write-Verbose "Restarting $thisService"
+	stop-service -inputobject $thisService
+	Start-Service -InputObject $thisService	
+	} 
+	Get-SophosInfo
+	Input-SophosData
+	$Sophos
+	}
+
